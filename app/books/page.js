@@ -1,144 +1,275 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
-const books = [
-  {
-    id: 1,
-    title: "The Silent Forest",
-    author: "Maya Sharma",
-    category: "Fiction",
-    premium: false,
-  },
-  {
-    id: 2,
-    title: "Beyond the Stars",
-    author: "Alex Carter",
-    category: "Fantasy",
-    premium: true,
-  },
-  {
-    id: 3,
-    title: "The Last Journey",
-    author: "Sarah Wilson",
-    category: "Adventure",
-    premium: false,
-  },
-  {
-    id: 4,
-    title: "Dreams of Tomorrow",
-    author: "James Lee",
-    category: "Romance",
-    premium: true,
-  },
-  {
-    id: 5,
-    title: "Whispers in the Rain",
-    author: "Emma Davis",
-    category: "Mystery",
-    premium: false,
-  },
-  {
-    id: 6,
-    title: "The Hidden Kingdom",
-    author: "Daniel Smith",
-    category: "Fantasy",
-    premium: true,
-  },
-];
-
 export default function BooksPage() {
-  return (
-    <main className="min-h-screen bg-gray-50">
+  const [books, setBooks] = useState([]);
+  const [externalBooks, setExternalBooks] = useState([]);
 
-      {/* Header */}
-      <section className="bg-purple-50 py-12">
-        <div className="max-w-7xl mx-auto px-6">
+  const [search, setSearch] = useState("");
+  const [externalSearch, setExternalSearch] = useState("fiction");
+
+  const [loading, setLoading] = useState(true);
+  const [externalLoading, setExternalLoading] = useState(false);
+
+  // Fetch Readora books
+  useEffect(() => {
+    const fetchBooks = async () => {
+      try {
+        const response = await fetch("/api/books");
+        const data = await response.json();
+
+        if (response.ok) {
+          setBooks(data);
+        }
+      } catch (error) {
+        console.error("Failed to fetch Readora books:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBooks();
+  }, []);
+
+  // Fetch Open Library books
+  const fetchExternalBooks = async (query = "fiction") => {
+    setExternalLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/external-books?q=${encodeURIComponent(query)}`
+      );
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setExternalBooks(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch external books:", error);
+    } finally {
+      setExternalLoading(false);
+    }
+  };
+
+  // Load initial external books
+  useEffect(() => {
+    fetchExternalBooks("fiction");
+  }, []);
+
+  const filteredBooks = books.filter((book) => {
+    const searchText = search.toLowerCase();
+
+    return (
+      book.title.toLowerCase().includes(searchText) ||
+      book.author.toLowerCase().includes(searchText)
+    );
+  });
+
+  const handleExternalSearch = (e) => {
+    e.preventDefault();
+
+    if (!externalSearch.trim()) return;
+
+    fetchExternalBooks(externalSearch);
+  };
+
+  return (
+    <main className="min-h-screen bg-gray-50 py-10">
+      <div className="max-w-7xl mx-auto px-6">
+
+        {/* ========================= */}
+        {/* READORA BOOKS */}
+        {/* ========================= */}
+
+        <div className="mb-10">
           <h1 className="text-4xl font-bold text-gray-900">
             Explore Books
           </h1>
 
           <p className="text-gray-600 mt-2">
-            Discover your next favorite book.
+            Discover books available on Readora.
           </p>
         </div>
-      </section>
 
-      {/* Search */}
-      <section className="max-w-7xl mx-auto px-6 py-8">
-        <div className="flex flex-col md:flex-row gap-4">
+        <input
+          type="text"
+          placeholder="Search Readora books..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full border border-gray-300 rounded-lg px-4 py-3 bg-white mb-10"
+        />
 
-          <input
-            type="text"
-            placeholder="Search books or authors..."
-            className="flex-1 bg-white border border-gray-300 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500"
-          />
+        {loading ? (
+          <p className="text-gray-500">Loading Readora books...</p>
+        ) : filteredBooks.length === 0 ? (
+          <p className="text-gray-500">No Readora books found.</p>
+        ) : (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
 
-          <select className="bg-white border border-gray-300 rounded-lg px-4 py-3 outline-none">
-            <option>All Categories</option>
-            <option>Fiction</option>
-            <option>Fantasy</option>
-            <option>Adventure</option>
-            <option>Romance</option>
-            <option>Mystery</option>
-          </select>
+            {filteredBooks.map((book) => (
+              <div
+                key={book.id}
+                className="bg-white rounded-xl shadow-sm border overflow-hidden hover:shadow-md transition"
+              >
+                <div className="h-52 bg-purple-100 flex items-center justify-center">
+                  <span className="text-5xl">📖</span>
+                </div>
 
-        </div>
-      </section>
+                <div className="p-6">
 
-      {/* Books */}
-      <section className="max-w-7xl mx-auto px-6 pb-12">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="text-xl font-semibold text-gray-900">
+                      {book.title}
+                    </h2>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {book.isPremium && (
+                      <span className="bg-yellow-100 text-yellow-700 text-xs px-2 py-1 rounded-full">
+                        Premium
+                      </span>
+                    )}
+                  </div>
 
-          {books.map((book) => (
-            <div
-              key={book.id}
-              className="bg-white rounded-xl overflow-hidden border border-gray-200 shadow-sm hover:shadow-lg transition"
+                  <p className="text-gray-500 mt-2">
+                    By {book.author}
+                  </p>
+
+                  {book.description && (
+                    <p className="text-gray-600 text-sm mt-3 line-clamp-2">
+                      {book.description}
+                    </p>
+                  )}
+
+                  <Link
+                    href={`/books/${book.id}`}
+                    className="block text-center bg-purple-600 text-white py-2 rounded-lg mt-5 hover:bg-purple-700"
+                  >
+                    View Book
+                  </Link>
+
+                </div>
+              </div>
+            ))}
+
+          </div>
+        )}
+
+        {/* ========================= */}
+        {/* EXTERNAL BOOKS */}
+        {/* ========================= */}
+
+        <section className="mt-20">
+
+          <div className="mb-8">
+            <h2 className="text-3xl font-bold text-gray-900">
+              Explore Free Books
+            </h2>
+
+            <p className="text-gray-600 mt-2">
+              Discover books from Open Library.
+            </p>
+          </div>
+
+          {/* External Search */}
+
+          <form
+            onSubmit={handleExternalSearch}
+            className="flex flex-col sm:flex-row gap-3 mb-10"
+          >
+            <input
+              type="text"
+              placeholder="Search books..."
+              value={externalSearch}
+              onChange={(e) => setExternalSearch(e.target.value)}
+              className="flex-1 border border-gray-300 rounded-lg px-4 py-3 bg-white"
+            />
+
+            <button
+              type="submit"
+              className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700"
             >
+              Search
+            </button>
+          </form>
 
-              {/* Cover */}
-              <div className="h-64 bg-purple-100 flex items-center justify-center relative">
-                <span className="text-6xl">
-                  📖
-                </span>
+          {externalLoading ? (
+            <p className="text-gray-500">
+              Searching Open Library...
+            </p>
+          ) : externalBooks.length === 0 ? (
+            <p className="text-gray-500">
+              No external books found.
+            </p>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
 
-                {book.premium && (
-                  <span className="absolute top-4 right-4 bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-sm font-medium">
-                    👑 Premium
-                  </span>
-                )}
-              </div>
-
-              {/* Details */}
-              <div className="p-5">
-
-                <h2 className="text-xl font-bold text-gray-900">
-                  {book.title}
-                </h2>
-
-                <p className="text-gray-500 mt-1">
-                  By {book.author}
-                </p>
-
-                <p className="text-sm text-purple-600 mt-3">
-                  {book.category}
-                </p>
-
-                <Link
-                  href={`/books/${book.id}`}
-                  className="block text-center bg-purple-600 text-white mt-5 py-2 rounded-lg hover:bg-purple-700"
+              {externalBooks.map((book) => (
+                <div
+                  key={book.id}
+                  className="bg-white rounded-xl shadow-sm border overflow-hidden"
                 >
-                  View Book
-                </Link>
 
-              </div>
+                  {/* Cover */}
+
+                  <div className="h-64 bg-gray-100 flex items-center justify-center">
+
+                    {book.cover ? (
+                      <img
+                        src={book.cover}
+                        alt={book.title}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-5xl">📚</span>
+                    )}
+
+                  </div>
+
+                  {/* Book information */}
+
+                  <div className="p-5">
+
+                    <h3 className="font-semibold text-gray-900 line-clamp-2">
+                      {book.title}
+                    </h3>
+
+                    <p className="text-sm text-gray-500 mt-2">
+                      {book.author}
+                    </p>
+
+                    {book.publishYear && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Published: {book.publishYear}
+                      </p>
+                    )}
+
+                    {book.hasFulltext && (
+                      <span className="inline-block mt-3 bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full">
+                        Available to read
+                      </span>
+                    )}
+
+                    <a
+                      href={`https://openlibrary.org${book.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block text-center border border-purple-600 text-purple-600 py-2 rounded-lg mt-4 hover:bg-purple-50"
+                    >
+                      View on Open Library
+                    </a>
+
+                  </div>
+                </div>
+              ))}
 
             </div>
-          ))}
+          )}
 
-        </div>
+        </section>
 
-      </section>
-
+      </div>
     </main>
   );
 }

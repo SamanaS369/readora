@@ -1,116 +1,222 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
-const books = {
-  1: {
-    title: "The Silent Forest",
-    author: "Maya Sharma",
-    chapters: [
-      {
-        title: "Chapter 1: The Beginning",
-        content: `
-The forest was unusually quiet that morning.
-
-Maya stood at the edge of the trees and looked into the distance. 
-The tall trees moved gently with the wind, while sunlight passed 
-through the leaves and touched the ground.
-
-She had heard stories about this forest since she was a child.
-
-People said that something mysterious lived deep inside it.
-
-Maya had never believed those stories.
-
-But today, she was about to discover that some stories were not 
-just stories.
-        `,
-      },
-      {
-        title: "Chapter 2: Into the Forest",
-        content: `
-Maya slowly walked between the trees.
-
-The path became narrower as she went deeper into the forest. 
-Birds could be heard above her, but everything around her felt 
-strangely peaceful.
-
-After walking for almost an hour, she noticed something unusual.
-
-There was an old wooden door standing between two trees.
-
-There was no building.
-
-Only the door.
-
-Maya stepped closer.
-        `,
-      },
-      {
-        title: "Chapter 3: The Secret",
-        content: `
-The old door slowly opened.
-
-Behind it was a narrow path covered with glowing flowers.
-
-Maya looked around in disbelief.
-
-She knew she had discovered something that nobody else had seen.
-
-Taking a deep breath, she stepped through the door.
-
-Her journey had finally begun.
-        `,
-      },
-    ],
-  },
-
-  2: {
-    title: "Beyond the Stars",
-    author: "Alex Carter",
-    chapters: [
-      {
-        title: "Chapter 1: The Sky",
-        content: `
-The night sky was brighter than usual.
-
-Alex looked through the telescope and noticed something strange.
-
-A small light was moving between the stars.
-
-He had never seen anything like it before.
-
-Then the light suddenly disappeared.
-        `,
-      },
-      {
-        title: "Chapter 2: The Message",
-        content: `
-The next morning, Alex found a strange symbol drawn on his window.
-
-He immediately recognized it.
-
-It was the same symbol he had seen beside the mysterious light.
-
-Someone—or something—was trying to send him a message.
-        `,
-      },
-    ],
-  },
-};
-
-export default function ReaderPage({ params }) {
+export default function ReaderPage() {
+  const params = useParams();
+  const router = useRouter();
   const id = params.id;
-  const book = books[id];
 
+  const [book, setBook] = useState(null);
+  const [chapters, setChapters] = useState([]);
   const [currentChapter, setCurrentChapter] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [savingProgress, setSavingProgress] = useState(false);
+  const [isBookmarked, setIsBookmarked] = useState(false);
+  const [bookmarkLoading, setBookmarkLoading] = useState(false);
+
+  // Load book, reading progress and bookmark
+  useEffect(() => {
+    if (!id) return;
+
+    const fetchBook = async () => {
+      try {
+        const response = await fetch(`/api/books/${id}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to load book");
+        }
+
+        setBook(data.book);
+        setChapters(data.chapters);
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user && data.chapters.length > 0) {
+          // Get saved reading progress
+          const { data: progressData, error: progressError } =
+            await supabase
+              .from("reading_progress")
+              .select("chapter_id, progress")
+              .eq("user_id", user.id)
+              .eq("book_id", Number(id))
+              .maybeSingle();
+
+          if (progressError) {
+            console.warn(
+              "Could not load reading progress:",
+              progressError
+            );
+          }
+
+          if (progressData) {
+            const savedChapterIndex = data.chapters.findIndex(
+              (chapter) => chapter.id === progressData.chapter_id
+            );
+
+            if (savedChapterIndex !== -1) {
+              setCurrentChapter(savedChapterIndex);
+            }
+          }
+
+          // Check whether book is already bookmarked
+          const { data: libraryData, error: libraryError } =
+            await supabase
+              .from("library")
+              .select("id")
+              .eq("user_id", user.id)
+              .eq("book_id", Number(id))
+              .maybeSingle();
+
+          if (libraryError) {
+            console.warn(
+              "Could not check library:",
+              libraryError
+            );
+          }
+
+          setIsBookmarked(!!libraryData);
+        }
+      } catch (error) {
+        console.error("Failed to fetch book:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBook();
+  }, [id]);
+
+  // Save or remove bookmark
+  const toggleBookmark = async () => {
+    try {
+      setBookmarkLoading(true);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.push("/login");
+        return;
+      }
+
+      if (isBookmarked) {
+        // Remove from library
+        const { error } = await supabase
+          .from("library")
+          .delete()
+          .eq("user_id", user.id)
+          .eq("book_id", Number(id));
+
+        if (error) throw error;
+
+        setIsBookmarked(false);
+      } else {
+        // Add to library
+        const { error } = await supabase
+          .from("library")
+          .insert({
+            user_id: user.id,
+            book_id: Number(id),
+          });
+
+        if (error) throw error;
+
+        setIsBookmarked(true);
+      }
+    } catch (error) {
+      console.error("Bookmark error:", error);
+    } finally {
+      setBookmarkLoading(false);
+    }
+  };
+
+  // Save reading progress
+  const saveProgress = async (chapterIndex) => {
+    if (!book || !chapters.length) return;
+
+    try {
+      setSavingProgress(true);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) return;
+
+      const progress = Math.round(
+        ((chapterIndex + 1) / chapters.length) * 100
+      );
+
+      const chapter = chapters[chapterIndex];
+
+      const { data: existingProgress, error: checkError } =
+        await supabase
+          .from("reading_progress")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("book_id", book.id)
+          .maybeSingle();
+
+      if (checkError) {
+        throw checkError;
+      }
+
+      if (existingProgress) {
+        const { error } = await supabase
+          .from("reading_progress")
+          .update({
+            chapter_id: chapter.id,
+            progress,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existingProgress.id);
+
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("reading_progress")
+          .insert({
+            user_id: user.id,
+            book_id: book.id,
+            chapter_id: chapter.id,
+            progress,
+          });
+
+        if (error) throw error;
+      }
+    } catch (error) {
+      console.error("Failed to save reading progress:", error);
+    } finally {
+      setSavingProgress(false);
+    }
+  };
+
+  // Change chapter and save progress
+  const changeChapter = (newChapter) => {
+    setCurrentChapter(newChapter);
+    saveProgress(newChapter);
+  };
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">Loading book...</p>
+      </main>
+    );
+  }
 
   if (!book) {
     return (
-      <main className="min-h-screen flex items-center justify-center">
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-
           <h1 className="text-3xl font-bold text-gray-900">
             Book Not Found
           </h1>
@@ -121,112 +227,135 @@ export default function ReaderPage({ params }) {
           >
             Back to Books
           </Link>
-
         </div>
       </main>
     );
   }
 
-  const chapter = book.chapters[currentChapter];
+  if (chapters.length === 0) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-gray-900">
+            {book.title}
+          </h1>
 
-  const progress =
-    ((currentChapter + 1) / book.chapters.length) * 100;
+          <p className="text-gray-500 mt-3">
+            No chapters available yet.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  const chapter = chapters[currentChapter];
+
+  const progress = Math.round(
+    ((currentChapter + 1) / chapters.length) * 100
+  );
 
   return (
-    <main className="min-h-screen bg-gray-100">
-
-      {/* Reader Header */}
-      <header className="bg-white border-b sticky top-0 z-10">
-
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-
+    <main className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="sticky top-0 z-10 bg-white border-b">
+        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link
-            href={`/books/${id}`}
+            href={`/books/${book.id}`}
             className="text-purple-600 hover:underline"
           >
             ← Back
           </Link>
 
-          <h1 className="font-bold text-gray-900">
+          <h1 className="font-semibold text-gray-900">
             {book.title}
           </h1>
 
-          <button className="text-gray-600 hover:text-purple-600">
-            🔖
+          <button
+            onClick={toggleBookmark}
+            disabled={bookmarkLoading}
+            className="text-xl disabled:opacity-50"
+            title={
+              isBookmarked
+                ? "Remove from Library"
+                : "Add to Library"
+            }
+          >
+            {isBookmarked ? "🔖" : "🔖"}
           </button>
-
         </div>
-
-        {/* Progress Bar */}
-        <div className="h-1 bg-gray-200">
-          <div
-            className="h-1 bg-purple-600 transition-all"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
       </header>
 
-      {/* Reader */}
-      <section className="max-w-3xl mx-auto px-6 py-12">
+      {/* Progress */}
+      <div className="bg-white border-b">
+        <div className="max-w-4xl mx-auto px-6 py-3">
+          <div className="flex justify-between text-sm text-gray-500 mb-2">
+            <span>
+              Chapter {currentChapter + 1} of {chapters.length}
+            </span>
 
-        {/* Book Information */}
-        <div className="text-center mb-12">
-
-          <p className="text-gray-500">
-            By {book.author}
-          </p>
-
-          <p className="text-sm text-purple-600 mt-2">
-            Chapter {currentChapter + 1} of {book.chapters.length}
-          </p>
-
-        </div>
-
-        {/* Chapter */}
-        <article className="bg-white rounded-2xl shadow-sm px-8 md:px-14 py-12">
-
-          <h2 className="text-3xl font-bold text-gray-900 mb-8">
-            {chapter.title}
-          </h2>
-
-          <div className="text-lg text-gray-700 leading-9 whitespace-pre-line">
-            {chapter.content}
+            <span>{progress}%</span>
           </div>
 
-        </article>
+          <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-purple-600 transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Chapter Content */}
+      <article className="max-w-3xl mx-auto px-6 py-12">
+        <p className="text-purple-600 font-medium mb-3">
+          Chapter {chapter.chapterNumber}
+        </p>
+
+        <h2 className="text-4xl font-bold text-gray-900 mb-8">
+          {chapter.title}
+        </h2>
+
+        <div className="text-lg leading-8 text-gray-700 whitespace-pre-line">
+          {chapter.content}
+        </div>
 
         {/* Navigation */}
-        <div className="flex justify-between items-center mt-8">
-
+        <div className="flex justify-between items-center mt-12 pt-8 border-t">
           <button
             onClick={() =>
-              setCurrentChapter((previous) => previous - 1)
+              changeChapter(Math.max(currentChapter - 1, 0))
             }
             disabled={currentChapter === 0}
-            className="px-5 py-3 rounded-lg border bg-white disabled:opacity-40"
+            className="px-5 py-2 rounded-lg border border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100"
           >
             ← Previous
           </button>
 
-          <span className="text-sm text-gray-500">
-            {Math.round(progress)}% complete
-          </span>
+          <div className="text-center">
+            <span className="text-gray-500">
+              {currentChapter + 1} / {chapters.length}
+            </span>
+
+            {savingProgress && (
+              <p className="text-xs text-purple-600 mt-1">
+                Saving...
+              </p>
+            )}
+          </div>
 
           <button
             onClick={() =>
-              setCurrentChapter((previous) => previous + 1)
+              changeChapter(
+                Math.min(currentChapter + 1, chapters.length - 1)
+              )
             }
-            disabled={currentChapter === book.chapters.length - 1}
-            className="px-5 py-3 rounded-lg bg-purple-600 text-white disabled:opacity-40"
+            disabled={currentChapter === chapters.length - 1}
+            className="px-5 py-2 rounded-lg bg-purple-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-purple-700"
           >
             Next →
           </button>
-
         </div>
-
-      </section>
-
+      </article>
     </main>
   );
 }
