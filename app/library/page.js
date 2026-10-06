@@ -2,451 +2,760 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 export default function LibraryPage() {
-  const router = useRouter();
-
   const [libraryBooks, setLibraryBooks] = useState([]);
+  const [libraryStories, setLibraryStories] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const fetchLibrary = async () => {
-      try {
-        setLoading(true);
-        setError("");
+    fetchLibrary();
+  }, []);
 
-        // Get logged-in user
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
+  async function fetchLibrary() {
+    try {
+      setLoading(true);
+      setError("");
 
-        if (userError) {
-          throw userError;
-        }
+      // --------------------------------------------------
+      // 1. GET CURRENT USER
+      // --------------------------------------------------
 
-        // If user is not logged in
-        if (!user) {
-          router.push("/login");
-          return;
-        }
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-        // Get books saved by this user
-        const { data: libraryData, error: libraryError } =
-          await supabase
-            .from("library")
-            .select("book_id, created_at")
-            .eq("user_id", user.id);
+      if (userError) {
+        console.error("User error:", userError);
+        throw new Error(userError.message);
+      }
 
-        if (libraryError) {
-          throw libraryError;
-        }
+      if (!user) {
+        setLibraryBooks([]);
+        setLibraryStories([]);
+        setError("Please login to view your library.");
+        return;
+      }
 
-        // No books in library
-        if (!libraryData || libraryData.length === 0) {
-          setLibraryBooks([]);
-          return;
-        }
+      console.log("Logged in user:", user.id);
 
-        // Get book IDs
-        const bookIds = libraryData.map((item) => item.book_id);
+      // --------------------------------------------------
+      // 2. GET LIBRARY ITEMS
+      // --------------------------------------------------
 
-        // Get actual books
-        const { data: booksData, error: booksError } =
-          await supabase
-            .from("books")
-            .select("*")
-            .in("id", bookIds);
-
-        if (booksError) {
-          throw booksError;
-        }
-
-        // Get reading progress
-        const { data: progressData, error: progressError } =
-          await supabase
-            .from("reading_progress")
-            .select("*")
-            .eq("user_id", user.id);
-
-        if (progressError) {
-          console.warn(
-            "Could not load reading progress:",
-            progressError
-          );
-        }
-
-        // Combine book + progress information
-        const formattedBooks = (booksData || []).map((book) => {
-          const progressRecord = (progressData || []).find(
-            (progress) => progress.book_id === book.id
-          );
-
-          const progress = progressRecord
-            ? Number(progressRecord.progress || 0)
-            : 0;
-
-          return {
-            id: book.id,
-            title: book.title,
-            author: book.author,
-            category: book.category || "Uncategorized",
-            progress: progress,
-            status:
-              progress >= 100
-                ? "Completed"
-                : "Currently Reading",
-            cover_url: book.cover_url,
-          };
+      const {
+        data: libraryData,
+        error: libraryError,
+      } = await supabase
+        .from("library")
+        .select("id, user_id, book_id, story_id, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
         });
 
-        setLibraryBooks(formattedBooks);
-      } catch (err) {
-        console.error("Library error:", err);
-        setError(
-          err.message || "Failed to load your library."
+      if (libraryError) {
+        console.error(
+          "Supabase library error:",
+          libraryError
         );
-      } finally {
-        setLoading(false);
+
+        console.error(
+          "Library error message:",
+          libraryError?.message
+        );
+
+        console.error(
+          "Library error details:",
+          libraryError?.details
+        );
+
+        console.error(
+          "Library error hint:",
+          libraryError?.hint
+        );
+
+        throw new Error(
+          libraryError.message ||
+            libraryError.details ||
+            "Failed to load library."
+        );
       }
-    };
 
-    fetchLibrary();
-  }, [router]);
+      console.log(
+        "Library rows:",
+        libraryData
+      );
 
-  // Loading state
+      if (!libraryData || libraryData.length === 0) {
+        setLibraryBooks([]);
+        setLibraryStories([]);
+        return;
+      }
+
+      // --------------------------------------------------
+      // 3. SEPARATE BOOKS AND STORIES
+      // --------------------------------------------------
+
+      const bookIds = libraryData
+        .filter(
+          (item) =>
+            item.book_id !== null &&
+            item.book_id !== undefined
+        )
+        .map((item) => Number(item.book_id));
+
+      const storyIds = libraryData
+        .filter(
+          (item) =>
+            item.story_id !== null &&
+            item.story_id !== undefined
+        )
+        .map((item) => Number(item.story_id));
+
+      console.log("Book IDs:", bookIds);
+      console.log("Story IDs:", storyIds);
+
+      // --------------------------------------------------
+      // 4. FETCH BOOKS
+      // --------------------------------------------------
+
+      let books = [];
+
+      if (bookIds.length > 0) {
+        const {
+          data: booksData,
+          error: booksError,
+        } = await supabase
+          .from("books")
+          .select(`
+            id,
+            title,
+            author,
+            description,
+            cover_url,
+            is_premium
+          `)
+          .in("id", bookIds);
+
+        if (booksError) {
+          console.error(
+            "Books error:",
+            booksError
+          );
+
+          throw new Error(
+            booksError.message ||
+              "Failed to load books."
+          );
+        }
+
+        books = booksData || [];
+      }
+
+      // --------------------------------------------------
+      // 5. FETCH COMMUNITY STORIES
+      // --------------------------------------------------
+
+      let stories = [];
+
+      if (storyIds.length > 0) {
+        const {
+          data: storiesData,
+          error: storiesError,
+        } = await supabase
+          .from("stories")
+          .select(`
+            id,
+            title,
+            content,
+            cover_url,
+            user_id,
+            category_id,
+            created_at,
+            status
+          `)
+          .in("id", storyIds)
+          .eq("status", "published");
+
+        if (storiesError) {
+          console.error(
+            "Stories error:",
+            storiesError
+          );
+
+          throw new Error(
+            storiesError.message ||
+              "Failed to load community stories."
+          );
+        }
+
+        stories = storiesData || [];
+      }
+
+      // --------------------------------------------------
+      // 6. GET AUTHORS FOR STORIES
+      // --------------------------------------------------
+
+      const authorIds = [
+        ...new Set(
+          stories
+            .map((story) => story.user_id)
+            .filter(Boolean)
+        ),
+      ];
+
+      let authors = [];
+
+      if (authorIds.length > 0) {
+        const {
+          data: authorsData,
+          error: authorsError,
+        } = await supabase
+          .from("profiles")
+          .select("id, name")
+          .in("id", authorIds);
+
+        if (authorsError) {
+          console.error(
+            "Authors error:",
+            authorsError
+          );
+        } else {
+          authors = authorsData || [];
+        }
+      }
+
+      // --------------------------------------------------
+      // 7. FORMAT BOOKS
+      // --------------------------------------------------
+
+      const formattedBooks = books.map(
+        (book) => ({
+          ...book,
+          type: "book",
+        })
+      );
+
+      // --------------------------------------------------
+      // 8. FORMAT STORIES
+      // --------------------------------------------------
+
+      const formattedStories = stories.map(
+        (story) => {
+          const author = authors.find(
+            (item) =>
+              item.id === story.user_id
+          );
+
+          return {
+            ...story,
+            type: "story",
+            authorName:
+              author?.name ||
+              "Anonymous",
+          };
+        }
+      );
+
+      setLibraryBooks(
+        formattedBooks
+      );
+
+      setLibraryStories(
+        formattedStories
+      );
+
+      console.log(
+        "Formatted books:",
+        formattedBooks
+      );
+
+      console.log(
+        "Formatted stories:",
+        formattedStories
+      );
+    } catch (err) {
+      console.error(
+        "Library error:",
+        err
+      );
+
+      console.error(
+        "Library error message:",
+        err?.message
+      );
+
+      setError(
+        err?.message ||
+          "Failed to load your library."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // --------------------------------------------------
+  // REMOVE FROM LIBRARY
+  // --------------------------------------------------
+
+  async function removeBook(bookId) {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from("library")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("book_id", bookId);
+
+      if (error) {
+        console.error(
+          "Remove book error:",
+          error
+        );
+
+        alert(
+          error.message ||
+            "Could not remove book."
+        );
+
+        return;
+      }
+
+      setLibraryBooks((prev) =>
+        prev.filter(
+          (book) =>
+            book.id !== bookId
+        )
+      );
+    } catch (err) {
+      console.error(
+        "Remove book error:",
+        err
+      );
+    }
+  }
+
+  async function removeStory(storyId) {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from("library")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("story_id", storyId);
+
+      if (error) {
+        console.error(
+          "Remove story error:",
+          error
+        );
+
+        alert(
+          error.message ||
+            "Could not remove story."
+        );
+
+        return;
+      }
+
+      setLibraryStories((prev) =>
+        prev.filter(
+          (story) =>
+            story.id !== storyId
+        )
+      );
+    } catch (err) {
+      console.error(
+        "Remove story error:",
+        err
+      );
+    }
+  }
+
+  // --------------------------------------------------
+  // LOADING
+  // --------------------------------------------------
+
   if (loading) {
     return (
-      <main className="min-h-screen bg-gray-50">
-
-        <section className="bg-purple-50 py-12">
-          <div className="max-w-7xl mx-auto px-6">
-
-            <h1 className="text-4xl font-bold text-gray-900">
-              My Library
-            </h1>
-
-            <p className="text-gray-600 mt-2">
-              Your books, reading progress, and reading history.
-            </p>
-
-          </div>
-        </section>
-
-        <section className="max-w-7xl mx-auto px-6 py-10">
-
-          <div className="bg-white border rounded-xl p-8 text-center">
-
-            <p className="text-gray-500">
-              Loading your library...
-            </p>
-
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-5xl mb-4">
+            📚
           </div>
 
-        </section>
-
+          <p className="text-gray-600">
+            Loading your library...
+          </p>
+        </div>
       </main>
     );
   }
 
-  // Error state
+  // --------------------------------------------------
+  // NOT LOGGED IN / ERROR
+  // --------------------------------------------------
+
   if (error) {
     return (
       <main className="min-h-screen bg-gray-50">
+        <div className="max-w-6xl mx-auto px-6 py-12">
 
-        <section className="bg-purple-50 py-12">
-          <div className="max-w-7xl mx-auto px-6">
+          <Link
+            href="/books"
+            className="text-purple-600 hover:underline"
+          >
+            ← Back to Books
+          </Link>
 
-            <h1 className="text-4xl font-bold text-gray-900">
-              My Library
+          <div className="bg-white border border-red-200 rounded-2xl p-8 mt-8">
+            <div className="text-5xl mb-4">
+              ⚠️
+            </div>
+
+            <h1 className="text-2xl font-bold text-gray-900">
+              Could not load your library
             </h1>
 
-            <p className="text-gray-600 mt-2">
-              Your books, reading progress, and reading history.
-            </p>
-
-          </div>
-        </section>
-
-        <section className="max-w-7xl mx-auto px-6 py-10">
-
-          <div className="bg-red-50 border border-red-200 rounded-xl p-6">
-
-            <p className="text-red-600">
+            <p className="text-red-600 mt-3">
               {error}
             </p>
 
+            <button
+              onClick={fetchLibrary}
+              className="mt-6 bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700"
+            >
+              Try Again
+            </button>
           </div>
 
+        </div>
+      </main>
+    );
+  }
+
+  // --------------------------------------------------
+  // EMPTY LIBRARY
+  // --------------------------------------------------
+
+  const isEmpty =
+    libraryBooks.length === 0 &&
+    libraryStories.length === 0;
+
+  if (isEmpty) {
+    return (
+      <main className="min-h-screen bg-gray-50">
+
+        <section className="bg-gradient-to-r from-purple-700 to-indigo-700 text-white">
+          <div className="max-w-6xl mx-auto px-6 py-12">
+
+            <h1 className="text-4xl font-bold">
+              📚 My Library
+            </h1>
+
+            <p className="text-purple-100 mt-3">
+              Your saved books and community stories
+              will appear here.
+            </p>
+
+          </div>
         </section>
+
+        <div className="max-w-6xl mx-auto px-6 py-16 text-center">
+
+          <div className="text-7xl mb-6">
+            📖
+          </div>
+
+          <h2 className="text-3xl font-bold text-gray-900">
+            Your library is empty
+          </h2>
+
+          <p className="text-gray-500 mt-3">
+            Browse Readora and add books or stories
+            to your library.
+          </p>
+
+          <Link
+            href="/books"
+            className="inline-block mt-7 bg-purple-600 text-white px-7 py-3 rounded-lg hover:bg-purple-700"
+          >
+            Explore Books
+          </Link>
+
+        </div>
 
       </main>
     );
   }
 
-  const currentlyReading = libraryBooks.filter(
-    (book) => book.status === "Currently Reading"
-  );
-
-  const completedBooks = libraryBooks.filter(
-    (book) => book.status === "Completed"
-  );
+  // --------------------------------------------------
+  // MAIN LIBRARY
+  // --------------------------------------------------
 
   return (
     <main className="min-h-screen bg-gray-50">
 
-      {/* Header */}
-      <section className="bg-purple-50 py-12">
+      {/* HEADER */}
+      <section className="bg-gradient-to-r from-purple-700 to-indigo-700 text-white">
 
-        <div className="max-w-7xl mx-auto px-6">
+        <div className="max-w-6xl mx-auto px-6 py-12">
 
-          <h1 className="text-4xl font-bold text-gray-900">
-            My Library
+          <h1 className="text-4xl font-bold">
+            📚 My Library
           </h1>
 
-          <p className="text-gray-600 mt-2">
-            Your books, reading progress, and reading history.
+          <p className="text-purple-100 mt-3">
+            Books and community stories you saved.
           </p>
+
+          <div className="flex flex-wrap gap-4 mt-6">
+
+            <div className="bg-white/10 rounded-lg px-5 py-3">
+              <span className="font-bold text-xl">
+                {libraryBooks.length}
+              </span>
+
+              <span className="ml-2 text-purple-100">
+                Books
+              </span>
+            </div>
+
+            <div className="bg-white/10 rounded-lg px-5 py-3">
+              <span className="font-bold text-xl">
+                {libraryStories.length}
+              </span>
+
+              <span className="ml-2 text-purple-100">
+                Stories
+              </span>
+            </div>
+
+          </div>
 
         </div>
 
       </section>
 
-      {/* Library */}
-      <section className="max-w-7xl mx-auto px-6 py-10">
+      <div className="max-w-6xl mx-auto px-6 py-10">
 
-        {/* Currently Reading */}
-        <div className="mb-12">
+        {/* BOOKS */}
+        {libraryBooks.length > 0 && (
+          <section>
 
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">
-            Currently Reading
-          </h2>
+            <div className="flex items-center justify-between mb-6">
 
-          {currentlyReading.length === 0 ? (
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">
+                  📖 Saved Books
+                </h2>
 
-            <div className="bg-white border rounded-xl p-8 text-center">
-
-              <div className="text-5xl mb-4">
-                📖
+                <p className="text-gray-500 mt-1">
+                  Books you added to your library.
+                </p>
               </div>
-
-              <h3 className="text-xl font-semibold text-gray-900">
-                No books currently being read
-              </h3>
-
-              <p className="text-gray-500 mt-2">
-                Add a book to your library and start reading.
-              </p>
-
-              <Link
-                href="/books"
-                className="inline-block mt-5 bg-purple-600 text-white px-5 py-2 rounded-lg hover:bg-purple-700"
-              >
-                Explore Books
-              </Link>
 
             </div>
 
-          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {libraryBooks.map(
+                (book) => (
+                  <div
+                    key={`book-${book.id}`}
+                    className="bg-white border rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition"
+                  >
 
-              {currentlyReading.map((book) => (
-
-                <div
-                  key={book.id}
-                  className="bg-white border rounded-xl p-5 shadow-sm"
-                >
-
-                  <div className="flex gap-5">
-
-                    {/* Cover */}
-                    <div className="w-28 h-36 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
+                    {/* COVER */}
+                    <div className="h-64 bg-gray-100">
 
                       {book.cover_url ? (
-
                         <img
                           src={book.cover_url}
                           alt={book.title}
                           className="w-full h-full object-cover"
                         />
-
                       ) : (
-
-                        <span className="text-4xl">
+                        <div className="w-full h-full flex items-center justify-center text-6xl">
                           📖
-                        </span>
-
+                        </div>
                       )}
 
                     </div>
 
-                    {/* Details */}
-                    <div className="flex-1">
+                    {/* CONTENT */}
+                    <div className="p-5">
 
-                      <h3 className="text-xl font-bold text-gray-900">
+                      {book.is_premium && (
+                        <span className="inline-block text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full mb-2">
+                          👑 Premium
+                        </span>
+                      )}
+
+                      <h3 className="font-bold text-lg text-gray-900 line-clamp-2">
                         {book.title}
                       </h3>
 
-                      <p className="text-gray-500 mt-1">
+                      <p className="text-sm text-gray-500 mt-2">
                         By {book.author}
                       </p>
 
-                      <p className="text-sm text-purple-600 mt-2">
-                        {book.category}
-                      </p>
+                      <div className="flex gap-2 mt-5">
 
-                      {/* Progress */}
-                      <div className="mt-5">
+                        <Link
+                          href={`/books/${book.id}`}
+                          className="flex-1 text-center bg-purple-600 text-white px-3 py-2.5 rounded-lg hover:bg-purple-700"
+                        >
+                          Read
+                        </Link>
 
-                        <div className="flex justify-between text-sm mb-2">
-
-                          <span className="text-gray-500">
-                            Reading Progress
-                          </span>
-
-                          <span className="font-medium">
-                            {book.progress}%
-                          </span>
-
-                        </div>
-
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-
-                          <div
-                            className="bg-purple-600 h-2 rounded-full"
-                            style={{
-                              width: `${Math.min(
-                                Math.max(book.progress, 0),
-                                100
-                              )}%`,
-                            }}
-                          />
-
-                        </div>
+                        <button
+                          onClick={() =>
+                            removeBook(
+                              book.id
+                            )
+                          }
+                          className="px-3 py-2.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"
+                          title="Remove from library"
+                        >
+                          🗑️
+                        </button>
 
                       </div>
-
-                      <Link
-                        href={`/reader/${book.id}`}
-                        className="inline-block mt-5 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700"
-                      >
-                        Continue Reading
-                      </Link>
 
                     </div>
 
                   </div>
-
-                </div>
-
-              ))}
+                )
+              )}
 
             </div>
 
-          )}
+          </section>
+        )}
 
-        </div>
+        {/* STORIES */}
+        {libraryStories.length > 0 && (
+          <section
+            className={
+              libraryBooks.length > 0
+                ? "mt-14"
+                : ""
+            }
+          >
 
-        {/* Reading History */}
-        <div>
+            <div className="mb-6">
 
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">
-            Reading History
-          </h2>
+              <h2 className="text-2xl font-bold text-gray-900">
+                ✍️ Saved Community Stories
+              </h2>
 
-          {completedBooks.length === 0 ? (
-
-            <div className="bg-white border rounded-xl p-8 text-center">
-
-              <div className="text-5xl mb-4">
-                📚
-              </div>
-
-              <h3 className="text-xl font-semibold text-gray-900">
-                No completed books yet
-              </h3>
-
-              <p className="text-gray-500 mt-2">
-                Books you finish reading will appear here.
+              <p className="text-gray-500 mt-1">
+                Stories written and published by the
+                Readora community.
               </p>
 
             </div>
 
-          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {libraryStories.map(
+                (story) => (
+                  <div
+                    key={`story-${story.id}`}
+                    className="bg-white border rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition"
+                  >
 
-              {completedBooks.map((book) => (
+                    {/* COVER */}
+                    <div className="h-64 bg-gradient-to-br from-purple-100 to-indigo-100">
 
-                <div
-                  key={book.id}
-                  className="bg-white border rounded-xl overflow-hidden shadow-sm"
-                >
+                      {story.cover_url ? (
+                        <img
+                          src={story.cover_url}
+                          alt={story.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-6xl">
+                          ✍️
+                        </div>
+                      )}
 
-                  {/* Cover */}
-                  <div className="h-48 bg-purple-100 flex items-center justify-center overflow-hidden">
+                    </div>
 
-                    {book.cover_url ? (
+                    {/* CONTENT */}
+                    <div className="p-5">
 
-                      <img
-                        src={book.cover_url}
-                        alt={book.title}
-                        className="w-full h-full object-cover"
-                      />
-
-                    ) : (
-
-                      <span className="text-6xl">
-                        📖
+                      <span className="inline-block text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full mb-2">
+                        ✍️ Community Story
                       </span>
 
-                    )}
+                      <h3 className="font-bold text-lg text-gray-900 line-clamp-2">
+                        {story.title}
+                      </h3>
 
-                  </div>
+                      <p className="text-sm text-gray-500 mt-2">
+                        By {story.authorName}
+                      </p>
 
-                  {/* Details */}
-                  <div className="p-5">
+                      <div className="flex gap-2 mt-5">
 
-                    <h3 className="text-xl font-bold text-gray-900">
-                      {book.title}
-                    </h3>
+                        <Link
+                          href={`/stories/${story.id}`}
+                          className="flex-1 text-center bg-purple-600 text-white px-3 py-2.5 rounded-lg hover:bg-purple-700"
+                        >
+                          Read
+                        </Link>
 
-                    <p className="text-gray-500 mt-1">
-                      By {book.author}
-                    </p>
+                        <button
+                          onClick={() =>
+                            removeStory(
+                              story.id
+                            )
+                          }
+                          className="px-3 py-2.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"
+                          title="Remove from library"
+                        >
+                          🗑️
+                        </button>
 
-                    <div className="flex justify-between items-center mt-4">
-
-                      <span className="text-sm text-green-600 font-medium">
-                        ✓ Completed
-                      </span>
-
-                      <Link
-                        href={`/books/${book.id}`}
-                        className="text-purple-600 hover:underline"
-                      >
-                        View Book
-                      </Link>
+                      </div>
 
                     </div>
 
                   </div>
-
-                </div>
-
-              ))}
+                )
+              )}
 
             </div>
 
-          )}
+          </section>
+        )}
 
-        </div>
-
-      </section>
+      </div>
 
     </main>
   );

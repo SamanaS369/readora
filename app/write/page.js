@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import AIAssistant from "@/components/AIAssistant";
 import { supabase } from "@/lib/supabase";
@@ -14,6 +14,7 @@ export default function WritePage() {
   // =========================
 
   const MIN_WORDS = 900;
+  const MAX_COVER_SIZE = 5 * 1024 * 1024; // 5 MB
 
   const getWordCount = (text) => {
     return text
@@ -27,8 +28,17 @@ export default function WritePage() {
   // =========================
 
   const [title, setTitle] = useState("");
-  const [category, setCategory] = useState("Fiction");
+  const [category, setCategory] = useState("");
+  const [categories, setCategories] = useState([]);
   const [content, setContent] = useState("");
+
+  // Cover image states
+  const [coverFile, setCoverFile] = useState(null);
+  const [coverPreview, setCoverPreview] = useState("");
+  const [uploadingCover, setUploadingCover] = useState(false);
+
+  const [loadingCategories, setLoadingCategories] =
+    useState(true);
 
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -36,21 +46,189 @@ export default function WritePage() {
   const [error, setError] = useState("");
 
   // =========================
-  // GET CATEGORY ID
+  // LOAD CATEGORIES
   // =========================
 
-  const getCategoryId = async () => {
-    const { data, error } = await supabase
-      .from("categories")
-      .select("id")
-      .eq("name", category)
-      .maybeSingle();
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("categories")
+          .select("id, name")
+          .order("name", { ascending: true });
 
-    if (error) {
-      throw error;
+        if (error) {
+          throw error;
+        }
+
+        setCategories(data || []);
+
+        // Select first category automatically
+        if (data && data.length > 0) {
+          setCategory(String(data[0].id));
+        }
+      } catch (error) {
+        console.error(
+          "Load categories error:",
+          error
+        );
+
+        setError(
+          "Failed to load story categories."
+        );
+      } finally {
+        setLoadingCategories(false);
+      }
+    };
+
+    loadCategories();
+  }, []);
+
+  // =========================
+  // COVER IMAGE SELECTION
+  // =========================
+
+  const handleCoverChange = (event) => {
+    setError("");
+
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
     }
 
-    return data?.id || null;
+    // Check image type
+    if (!file.type.startsWith("image/")) {
+      setError(
+        "Please select a valid image file."
+      );
+
+      event.target.value = "";
+      return;
+    }
+
+    // Check image size
+    if (file.size > MAX_COVER_SIZE) {
+      setError(
+        "Cover image must be smaller than 5 MB."
+      );
+
+      event.target.value = "";
+      return;
+    }
+
+    setCoverFile(file);
+
+    // Create preview
+    const previewUrl =
+      URL.createObjectURL(file);
+
+    setCoverPreview(previewUrl);
+  };
+
+  // =========================
+  // REMOVE COVER
+  // =========================
+
+  const removeCover = () => {
+    setCoverFile(null);
+    setCoverPreview("");
+  };
+
+  // =========================
+  // UPLOAD COVER TO SUPABASE
+  // =========================
+
+  const uploadCoverImage = async (userId) => {
+    if (!coverFile) {
+      return null;
+    }
+
+    try {
+      setUploadingCover(true);
+
+      // Create a safe file name
+      const fileExtension =
+        coverFile.name.split(".").pop() ||
+        "jpg";
+
+      const fileName =
+        `${crypto.randomUUID()}.${fileExtension}`;
+
+      // Store each user's images inside their own folder
+      const filePath =
+        `${userId}/${fileName}`;
+
+      const {
+        error: uploadError,
+      } = await supabase.storage
+        .from("story-covers")
+        .upload(
+          filePath,
+          coverFile,
+          {
+            contentType: coverFile.type,
+            upsert: false,
+          }
+        );
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      // Get public URL
+      const {
+        data: publicUrlData,
+      } = supabase.storage
+        .from("story-covers")
+        .getPublicUrl(filePath);
+
+      if (!publicUrlData?.publicUrl) {
+        throw new Error(
+          "Failed to get cover image URL."
+        );
+      }
+
+      return {
+        url: publicUrlData.publicUrl,
+        path: filePath,
+      };
+    } catch (error) {
+      console.error(
+        "Cover upload error:",
+        error
+      );
+
+      throw new Error(
+        error.message ||
+          "Failed to upload cover image."
+      );
+    } finally {
+      setUploadingCover(false);
+    }
+  };
+
+  // =========================
+  // DELETE UPLOADED COVER
+  // =========================
+
+  const deleteUploadedCover = async (
+    filePath
+  ) => {
+    if (!filePath) {
+      return;
+    }
+
+    try {
+      await supabase.storage
+        .from("story-covers")
+        .remove([filePath]);
+    } catch (error) {
+      console.error(
+        "Cover cleanup error:",
+        error
+      );
+    }
   };
 
   // =========================
@@ -61,17 +239,32 @@ export default function WritePage() {
     setError("");
 
     if (!title.trim()) {
-      setError("Please enter a story title.");
+      setError(
+        "Please enter a story title."
+      );
       return;
     }
 
     if (!content.trim()) {
-      setError("Please write some content before saving.");
+      setError(
+        "Please write some content before saving."
+      );
+      return;
+    }
+
+    if (!category) {
+      setError(
+        "Please select a category."
+      );
       return;
     }
 
     try {
       setSaving(true);
+
+      // -------------------------
+      // CHECK LOGIN
+      // -------------------------
 
       const {
         data: { user },
@@ -82,19 +275,42 @@ export default function WritePage() {
         return;
       }
 
-      const categoryId = await getCategoryId();
+      // -------------------------
+      // UPLOAD COVER
+      // -------------------------
 
-      const { error: insertError } = await supabase
-        .from("stories")
-        .insert({
-          user_id: user.id,
-          title: title.trim(),
-          category_id: categoryId,
-          content: content.trim(),
-          status: "draft",
-        });
+      let uploadedCover = null;
+
+      if (coverFile) {
+        uploadedCover =
+          await uploadCoverImage(user.id);
+      }
+
+      // -------------------------
+      // SAVE STORY
+      // -------------------------
+
+      const { error: insertError } =
+        await supabase
+          .from("stories")
+          .insert({
+            user_id: user.id,
+            title: title.trim(),
+            category_id: Number(category),
+            cover_url:
+              uploadedCover?.url || null,
+            content: content.trim(),
+            status: "draft",
+          });
 
       if (insertError) {
+        // Delete uploaded image if DB insert fails
+        if (uploadedCover?.path) {
+          await deleteUploadedCover(
+            uploadedCover.path
+          );
+        }
+
         throw insertError;
       }
 
@@ -104,7 +320,10 @@ export default function WritePage() {
         setSaved(false);
       }, 3000);
     } catch (error) {
-      console.error("Save draft error:", error);
+      console.error(
+        "Save draft error:",
+        error
+      );
 
       setError(
         error.message ||
@@ -127,7 +346,20 @@ export default function WritePage() {
     // -------------------------
 
     if (!title.trim()) {
-      setError("Please enter a story title.");
+      setError(
+        "Please enter a story title."
+      );
+      return;
+    }
+
+    // -------------------------
+    // CATEGORY CHECK
+    // -------------------------
+
+    if (!category) {
+      setError(
+        "Please select a category."
+      );
       return;
     }
 
@@ -146,7 +378,8 @@ export default function WritePage() {
     // WORD COUNT CHECK
     // -------------------------
 
-    const wordCount = getWordCount(content);
+    const wordCount =
+      getWordCount(content);
 
     if (wordCount < MIN_WORDS) {
       setError(
@@ -175,29 +408,39 @@ export default function WritePage() {
       // GET CATEGORY
       // -------------------------
 
-      const categoryId = await getCategoryId();
+      const selectedCategory =
+        categories.find(
+          (item) =>
+            String(item.id) ===
+            String(category)
+        );
+
+      const categoryName =
+        selectedCategory?.name ||
+        "General";
 
       // =========================
-      // STEP 1
       // AI MODERATION
       // =========================
 
-      const moderationResponse = await fetch(
-        "/api/moderate-story",
-        {
-          method: "POST",
+      const moderationResponse =
+        await fetch(
+          "/api/moderate-story",
+          {
+            method: "POST",
 
-          headers: {
-            "Content-Type": "application/json",
-          },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-          body: JSON.stringify({
-            title: title.trim(),
-            content: content.trim(),
-            category,
-          }),
-        }
-      );
+            body: JSON.stringify({
+              title: title.trim(),
+              content: content.trim(),
+              category: categoryName,
+            }),
+          }
+        );
 
       const moderationResult =
         await moderationResponse.json();
@@ -223,47 +466,68 @@ export default function WritePage() {
       // AI APPROVED
       // =========================
 
-      /*
-       * No admin approval is required.
-       *
-       * approved
-       *     ↓
-       * publish immediately
-       *
-       * needs_review
-       *     ↓
-       * also publish immediately
-       */
-
       if (
         decision === "approved" ||
         decision === "needs_review"
       ) {
-        const { error: insertError } =
-          await supabase
-            .from("stories")
-            .insert({
-              user_id: user.id,
+        // -------------------------
+        // UPLOAD COVER
+        // -------------------------
 
-              title: title.trim(),
+        let uploadedCover = null;
 
-              category_id: categoryId,
+        if (coverFile) {
+          uploadedCover =
+            await uploadCoverImage(
+              user.id
+            );
+        }
 
-              content: content.trim(),
+        // -------------------------
+        // INSERT PUBLISHED STORY
+        // -------------------------
 
-              status: "published",
+        const {
+          error: insertError,
+        } = await supabase
+          .from("stories")
+          .insert({
+            user_id: user.id,
 
-              moderation_status: "approved",
+            title: title.trim(),
 
-              moderation_reason: reason,
+            category_id:
+              Number(category),
 
-              moderation_score: score,
+            cover_url:
+              uploadedCover?.url ||
+              null,
 
-              reviewed_at:
-                new Date().toISOString(),
-            });
+            content: content.trim(),
+
+            status: "published",
+
+            moderation_status:
+              "approved",
+
+            moderation_reason:
+              reason,
+
+            moderation_score:
+              score,
+
+            reviewed_at:
+              new Date().toISOString(),
+          });
 
         if (insertError) {
+          // Clean up image if database insert fails
+          if (uploadedCover?.path) {
+            await deleteUploadedCover(
+              uploadedCover.path
+            );
+          }
+
           throw insertError;
         }
 
@@ -271,7 +535,9 @@ export default function WritePage() {
           "Your story has been approved by AI and published!"
         );
 
-        router.push("/my-stories");
+        router.push(
+          "/my-stories"
+        );
 
         return;
       }
@@ -281,6 +547,23 @@ export default function WritePage() {
       // =========================
 
       if (decision === "rejected") {
+        // -------------------------
+        // UPLOAD COVER
+        // -------------------------
+
+        let uploadedCover = null;
+
+        if (coverFile) {
+          uploadedCover =
+            await uploadCoverImage(
+              user.id
+            );
+        }
+
+        // -------------------------
+        // SAVE REJECTED STORY
+        // -------------------------
+
         const {
           data: story,
           error: insertError,
@@ -291,17 +574,25 @@ export default function WritePage() {
 
             title: title.trim(),
 
-            category_id: categoryId,
+            category_id:
+              Number(category),
+
+            cover_url:
+              uploadedCover?.url ||
+              null,
 
             content: content.trim(),
 
             status: "rejected",
 
-            moderation_status: "rejected",
+            moderation_status:
+              "rejected",
 
-            moderation_reason: reason,
+            moderation_reason:
+              reason,
 
-            moderation_score: score,
+            moderation_score:
+              score,
 
             reviewed_at:
               new Date().toISOString(),
@@ -310,6 +601,12 @@ export default function WritePage() {
           .single();
 
         if (insertError) {
+          if (uploadedCover?.path) {
+            await deleteUploadedCover(
+              uploadedCover.path
+            );
+          }
+
           throw insertError;
         }
 
@@ -326,9 +623,11 @@ export default function WritePage() {
 
             story_id: story.id,
 
-            title: "Story Not Approved",
+            title:
+              "Story Not Approved",
 
-            message: `Your story was not approved by AI. Reason: ${reason}`,
+            message:
+              `Your story was not approved by AI. Reason: ${reason}`,
 
             type: "moderation",
           });
@@ -344,7 +643,9 @@ export default function WritePage() {
           "Your story could not be published. Please check your notifications for more information."
         );
 
-        router.push("/my-stories");
+        router.push(
+          "/my-stories"
+        );
 
         return;
       }
@@ -385,7 +686,12 @@ export default function WritePage() {
   // CURRENT WORD COUNT
   // =========================
 
-  const wordCount = getWordCount(content);
+  const wordCount =
+    getWordCount(content);
+
+  // =========================
+  // RENDER
+  // =========================
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -400,7 +706,6 @@ export default function WritePage() {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
 
             <div>
-
               <h1 className="text-4xl font-bold text-gray-900">
                 Write Your Story
               </h1>
@@ -408,7 +713,6 @@ export default function WritePage() {
               <p className="text-gray-600 mt-2">
                 Turn your imagination into a story.
               </p>
-
             </div>
 
             <Link
@@ -455,7 +759,9 @@ export default function WritePage() {
                   type="text"
                   value={title}
                   onChange={(e) =>
-                    setTitle(e.target.value)
+                    setTitle(
+                      e.target.value
+                    )
                   }
                   placeholder="Enter your story title"
                   className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500"
@@ -474,30 +780,161 @@ export default function WritePage() {
                 <select
                   value={category}
                   onChange={(e) =>
-                    setCategory(e.target.value)
+                    setCategory(
+                      e.target.value
+                    )
                   }
-                  className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500"
+                  disabled={
+                    loadingCategories
+                  }
+                  className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500 disabled:bg-gray-100"
                 >
 
-                  <option>Fiction</option>
-
-                  <option>Fantasy</option>
-
-                  <option>Romance</option>
-
-                  <option>Mystery</option>
-
-                  <option>Adventure</option>
-
-                  <option>Horror</option>
-
-                  <option>Science Fiction</option>
-
-                  <option>Other</option>
+                  {loadingCategories ? (
+                    <option value="">
+                      Loading categories...
+                    </option>
+                  ) : categories.length ===
+                    0 ? (
+                    <option value="">
+                      No categories available
+                    </option>
+                  ) : (
+                    categories.map(
+                      (item) => (
+                        <option
+                          key={item.id}
+                          value={item.id}
+                        >
+                          {item.name}
+                        </option>
+                      )
+                    )
+                  )}
 
                 </select>
 
               </div>
+
+            </div>
+
+            {/* =========================
+                COVER IMAGE
+            ========================= */}
+
+            <div className="mt-6">
+
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Story Cover
+              </label>
+
+              <div className="border-2 border-dashed border-gray-300 rounded-xl p-6">
+
+                {!coverPreview ? (
+                  <div className="text-center">
+
+                    <div className="text-4xl mb-3">
+                      🖼️
+                    </div>
+
+                    <p className="text-gray-700 font-medium">
+                      Upload a cover image
+                    </p>
+
+                    <p className="text-sm text-gray-500 mt-1">
+                      JPG, PNG, WEBP or other image
+                      formats up to 5 MB
+                    </p>
+
+                    <label className="inline-block mt-4 cursor-pointer bg-purple-600 text-white px-5 py-2.5 rounded-lg font-medium hover:bg-purple-700">
+
+                      Choose Image
+
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={
+                          handleCoverChange
+                        }
+                        className="hidden"
+                      />
+
+                    </label>
+
+                  </div>
+                ) : (
+                  <div className="flex flex-col md:flex-row gap-6 items-start">
+
+                    {/* PREVIEW */}
+
+                    <div className="w-40">
+
+                      <img
+                        src={coverPreview}
+                        alt="Story cover preview"
+                        className="w-40 h-56 object-cover rounded-lg border shadow-sm"
+                      />
+
+                    </div>
+
+                    {/* DETAILS */}
+
+                    <div className="flex-1">
+
+                      <p className="font-medium text-gray-900">
+                        {coverFile?.name}
+                      </p>
+
+                      <p className="text-sm text-gray-500 mt-1">
+                        {coverFile
+                          ? `${(
+                              coverFile.size /
+                              1024 /
+                              1024
+                            ).toFixed(2)} MB`
+                          : ""}
+                      </p>
+
+                      <div className="flex flex-wrap gap-3 mt-4">
+
+                        <label className="cursor-pointer border border-purple-600 text-purple-600 px-4 py-2 rounded-lg font-medium hover:bg-purple-50">
+
+                          Change Image
+
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={
+                              handleCoverChange
+                            }
+                            className="hidden"
+                          />
+
+                        </label>
+
+                        <button
+                          type="button"
+                          onClick={
+                            removeCover
+                          }
+                          className="border border-red-300 text-red-600 px-4 py-2 rounded-lg font-medium hover:bg-red-50"
+                        >
+                          Remove
+                        </button>
+
+                      </div>
+
+                    </div>
+
+                  </div>
+                )}
+
+              </div>
+
+              <p className="text-sm text-gray-500 mt-2">
+                A good cover image helps readers
+                recognize your story.
+              </p>
 
             </div>
 
@@ -522,7 +959,8 @@ export default function WritePage() {
                     : "text-gray-500"
                 }`}
               >
-                {wordCount} / {MIN_WORDS} words
+                {wordCount} /{" "}
+                {MIN_WORDS} words
               </span>
 
             </div>
@@ -532,7 +970,9 @@ export default function WritePage() {
             <textarea
               value={content}
               onChange={(e) =>
-                setContent(e.target.value)
+                setContent(
+                  e.target.value
+                )
               }
               placeholder="Start writing your story here..."
               className="w-full min-h-[500px] border border-gray-300 rounded-xl p-5 text-lg leading-8 resize-y outline-none focus:ring-2 focus:ring-purple-500"
@@ -552,13 +992,13 @@ export default function WritePage() {
                 : `Minimum ${MIN_WORDS} words required to publish (approximately 3 pages).`}
             </p>
 
-            {/* =========================
-                AI ASSISTANT
-            ========================= */}
+            {/* AI ASSISTANT */}
 
             <AIAssistant
               content={content}
-              onAccept={acceptAISuggestion}
+              onAccept={
+                acceptAISuggestion
+              }
             />
 
           </div>
@@ -575,7 +1015,11 @@ export default function WritePage() {
 
               <button
                 onClick={saveDraft}
-                disabled={saving}
+                disabled={
+                  saving ||
+                  loadingCategories ||
+                  uploadingCover
+                }
                 className="border border-purple-600 text-purple-600 px-6 py-3 rounded-lg font-medium hover:bg-purple-50 disabled:opacity-50"
               >
                 {saving
@@ -588,7 +1032,9 @@ export default function WritePage() {
               <button
                 onClick={() => {
                   document
-                    .querySelector("textarea")
+                    .querySelector(
+                      "textarea"
+                    )
                     ?.focus();
                 }}
                 className="bg-purple-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-purple-700"
@@ -599,6 +1045,7 @@ export default function WritePage() {
               {/* PREVIEW */}
 
               <button
+                type="button"
                 className="border border-gray-300 text-gray-700 px-6 py-3 rounded-lg font-medium hover:bg-gray-50"
               >
                 👁️ Preview
@@ -607,8 +1054,14 @@ export default function WritePage() {
               {/* PUBLISH */}
 
               <button
-                onClick={publishStory}
-                disabled={publishing}
+                onClick={
+                  publishStory
+                }
+                disabled={
+                  publishing ||
+                  loadingCategories ||
+                  uploadingCover
+                }
                 className="bg-green-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
               >
                 {publishing
@@ -618,9 +1071,15 @@ export default function WritePage() {
 
             </div>
 
-            {/* =========================
-                SUCCESS MESSAGE
-            ========================= */}
+            {/* UPLOAD MESSAGE */}
+
+            {uploadingCover && (
+              <p className="text-purple-600 mt-4">
+                ⏳ Uploading cover image...
+              </p>
+            )}
+
+            {/* SUCCESS MESSAGE */}
 
             {saved && (
               <p className="text-green-600 mt-4">
@@ -628,9 +1087,7 @@ export default function WritePage() {
               </p>
             )}
 
-            {/* =========================
-                ERROR MESSAGE
-            ========================= */}
+            {/* ERROR MESSAGE */}
 
             {error && (
               <p className="text-red-600 mt-4">

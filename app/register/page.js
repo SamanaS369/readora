@@ -24,11 +24,15 @@ export default function RegisterPage() {
     setMessage("");
 
     try {
-      // 1. Create user in Supabase Authentication
       const { data, error: signUpError } =
         await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              name: name,
+            },
+          },
         });
 
       if (signUpError) {
@@ -41,29 +45,6 @@ export default function RegisterPage() {
         throw new Error("User registration failed.");
       }
 
-      // 2. Create profile
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .insert({
-          id: user.id,
-          name: name,
-          email: email,
-          role: "user",
-          plan: "free",
-        });
-
-      if (profileError) {
-        console.error("Profile creation error:", profileError);
-
-        setMessage(
-          "Account created, but the profile could not be created."
-        );
-
-        setLoading(false);
-        return;
-      }
-
-      // 3. Show result
       if (!data.session) {
         setMessage(
           "Account created! Please check your email to confirm your account."
@@ -77,15 +58,20 @@ export default function RegisterPage() {
       }
     } catch (error) {
       console.error("Registration error:", error);
-      setError(error.message || "Registration failed.");
-    }
 
-    setLoading(false);
+      setError(
+        error.message || "Registration failed."
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center px-6 py-12">
+
       <div className="w-full max-w-md bg-white border rounded-2xl shadow-sm p-8">
+
         <h1 className="text-3xl font-bold text-center text-gray-900">
           Create Account
         </h1>
@@ -106,7 +92,11 @@ export default function RegisterPage() {
           </div>
         )}
 
-        <form onSubmit={handleRegister} className="space-y-5">
+        <form
+          onSubmit={handleRegister}
+          className="space-y-5"
+        >
+
           <div>
             <label className="block text-sm font-medium mb-2">
               Name
@@ -115,7 +105,9 @@ export default function RegisterPage() {
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) =>
+                setName(e.target.value)
+              }
               placeholder="Enter your name"
               required
               className="w-full border border-gray-300 rounded-lg px-4 py-3"
@@ -130,7 +122,9 @@ export default function RegisterPage() {
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) =>
+                setEmail(e.target.value)
+              }
               placeholder="Enter your email"
               required
               className="w-full border border-gray-300 rounded-lg px-4 py-3"
@@ -145,7 +139,9 @@ export default function RegisterPage() {
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) =>
+                setPassword(e.target.value)
+              }
               placeholder="Create a password"
               minLength={6}
               required
@@ -158,20 +154,28 @@ export default function RegisterPage() {
             disabled={loading}
             className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50"
           >
-            {loading ? "Creating Account..." : "Register"}
+            {loading
+              ? "Creating Account..."
+              : "Register"}
           </button>
+
         </form>
 
         <p className="text-center text-gray-500 mt-6">
+
           Already have an account?{" "}
+
           <Link
             href="/login"
             className="text-purple-600 hover:underline"
           >
             Login
           </Link>
+
         </p>
+
       </div>
+
     </main>
   );
 }

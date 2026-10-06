@@ -1,514 +1,338 @@
-import Link from "next/link";
+"use client";
 
-const plans = [
-  {
-    name: "Free",
-    price: "$0",
-    description: "Perfect for getting started with Readora.",
-    button: "Current Plan",
-    popular: false,
-    features: [
-      "Read up to 5 books",
-      "Save books to your library",
-      "Write and publish stories",
-      "Basic AI writing assistance",
-      "Access to free stories",
-    ],
-  },
-  {
-    name: "Premium",
-    price: "$5",
-    description: "For readers and writers who want more.",
-    button: "Upgrade to Premium",
-    popular: true,
-    features: [
-      "Unlimited book reading",
-      "Access to premium books",
-      "Unlimited personal library",
-      "Advanced AI writing assistance",
-      "Grammar and spelling suggestions",
-      "Sentence improvement",
-      "Priority access to new stories",
-      "Premium-only stories",
-    ],
-  },
-];
-
-const premiumFeatures = [
-  {
-    icon: "📚",
-    title: "Unlimited Reading",
-    description:
-      "Read as many books and stories as you want without the free reading limit.",
-  },
-  {
-    icon: "🤖",
-    title: "Advanced AI Assistant",
-    description:
-      "Improve grammar, spelling, sentence structure, clarity, and wording while writing.",
-  },
-  {
-    icon: "⭐",
-    title: "Premium Stories",
-    description:
-      "Explore books and stories that are available exclusively to premium readers.",
-  },
-  {
-    icon: "💾",
-    title: "Unlimited Library",
-    description:
-      "Save and organize your favorite books without the free-plan limitation.",
-  },
-  {
-    icon: "✍️",
-    title: "Better Writing Tools",
-    description:
-      "Get additional tools to help develop and improve your stories.",
-  },
-  {
-    icon: "🚀",
-    title: "Early Access",
-    description:
-      "Discover selected new stories and platform features before free users.",
-  },
-];
-
-const faqs = [
-  {
-    question: "Can I use Readora for free?",
-    answer:
-      "Yes. Readora has a free plan that lets you read up to 5 books, save books, write stories, and use basic AI writing assistance.",
-  },
-  {
-    question: "What does Premium include?",
-    answer:
-      "Premium provides unlimited reading, premium stories, an expanded library, and advanced AI writing features.",
-  },
-  {
-    question: "Can I cancel Premium?",
-    answer:
-      "Yes. Once the payment system is connected, users will be able to manage and cancel their subscription from their account.",
-  },
-  {
-    question: "Can writers publish stories on the free plan?",
-    answer:
-      "Yes. Writers can create and publish stories without needing a Premium subscription.",
-  },
-];
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 export default function PremiumPage() {
-  return (
-    <main className="min-h-screen bg-gray-50">
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [error, setError] = useState("");
 
-      {/* ================= HERO ================= */}
-      <section className="bg-gradient-to-br from-purple-700 via-purple-600 to-indigo-600 text-white">
-        <div className="max-w-7xl mx-auto px-6 py-20 text-center">
+  useEffect(() => {
+    async function getUser() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-          <div className="inline-flex items-center gap-2 bg-white/15 border border-white/20 px-5 py-2 rounded-full text-sm font-medium">
-            ✨ Readora Premium
-          </div>
+      setUser(user);
+      setLoading(false);
+    }
 
-          <h1 className="text-4xl md:text-6xl font-bold mt-6">
-            Read More.
-            <br />
-            Write More.
-            <br />
-            Create More.
-          </h1>
+    getUser();
+  }, []);
 
-          <p className="max-w-2xl mx-auto text-purple-100 text-lg mt-6 leading-8">
-            Unlock unlimited reading, premium stories, and powerful AI
-            writing tools with Readora Premium.
-          </p>
+  async function handlePayment() {
+    setError("");
+    setPaymentLoading(true);
 
-          <div className="flex flex-col sm:flex-row justify-center gap-4 mt-8">
+    try {
+      if (!user) {
+        setError("Please login before making a payment.");
+        setPaymentLoading(false);
+        return;
+      }
+
+      const response = await fetch("/api/payment/esewa", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          amount: "500",
+          productCode: "READORA_PREMIUM",
+        }),
+      });
+
+      // Read response as text first.
+      // This prevents "Unexpected end of JSON input".
+      const responseText = await response.text();
+
+      console.log("eSewa API status:", response.status);
+      console.log("eSewa API response:", responseText);
+
+      let data;
+
+      try {
+        data = responseText ? JSON.parse(responseText) : null;
+      } catch (jsonError) {
+        throw new Error(
+          `Server returned invalid JSON. Response: ${responseText || "empty response"}`
+        );
+      }
+
+      if (!response.ok || !data?.success) {
+        throw new Error(
+          data?.error || "Failed to create eSewa payment."
+        );
+      }
+
+      // Create eSewa payment form
+      const form = document.createElement("form");
+
+      form.method = "POST";
+      form.action = data.paymentUrl;
+
+      const fields = {
+        amount: data.amount,
+        tax_amount: data.tax_amount,
+        total_amount: data.total_amount,
+        transaction_uuid: data.transaction_uuid,
+        product_code: data.product_code,
+        product_service_charge: data.product_service_charge,
+        product_delivery_charge: data.product_delivery_charge,
+        success_url: data.success_url,
+        failure_url: data.failure_url,
+        signed_field_names: data.signed_field_names,
+        signature: data.signature,
+      };
+
+      Object.entries(fields).forEach(([key, value]) => {
+        const input = document.createElement("input");
+
+        input.type = "hidden";
+        input.name = key;
+        input.value = value ?? "";
+
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+
+      form.submit();
+    } catch (error) {
+      console.error("Payment error:", error);
+
+      setError(
+        error?.message || "Something went wrong while starting the payment."
+      );
+
+      setPaymentLoading(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center">
+        <p>Loading...</p>
+      </main>
+    );
+  }
+
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+
+    if (status === "success") {
+      return (
+        <main className="min-h-screen flex items-center justify-center px-6">
+          <div className="max-w-md w-full bg-white shadow-lg rounded-2xl p-8 text-center">
+            <div className="text-5xl mb-4">🎉</div>
+
+            <h1 className="text-3xl font-bold text-green-600 mb-3">
+              Payment Successful!
+            </h1>
+
+            <p className="text-gray-600 mb-6">
+              Your Readora Premium membership has been activated.
+            </p>
 
             <a
-              href="#plans"
-              className="bg-white text-purple-700 px-7 py-3 rounded-lg font-semibold hover:bg-gray-100 transition"
+              href="/"
+              className="inline-block bg-black text-white px-6 py-3 rounded-lg"
             >
-              View Plans
+              Go to Home
             </a>
+          </div>
+        </main>
+      );
+    }
 
-            <Link
-              href="/books"
-              className="border border-white/50 text-white px-7 py-3 rounded-lg font-semibold hover:bg-white/10 transition"
+    if (status === "failed") {
+      return (
+        <main className="min-h-screen flex items-center justify-center px-6">
+          <div className="max-w-md w-full bg-white shadow-lg rounded-2xl p-8 text-center">
+            <div className="text-5xl mb-4">❌</div>
+
+            <h1 className="text-3xl font-bold text-red-600 mb-3">
+              Payment Failed
+            </h1>
+
+            <p className="text-gray-600 mb-6">
+              Your payment was not completed.
+            </p>
+
+            <button
+              onClick={() => {
+                window.history.replaceState({}, "", "/premium");
+                window.location.reload();
+              }}
+              className="bg-black text-white px-6 py-3 rounded-lg"
             >
-              Explore Books
-            </Link>
-
+              Try Again
+            </button>
           </div>
+        </main>
+      );
+    }
 
-        </div>
-      </section>
+    if (status === "verification_failed") {
+      return (
+        <main className="min-h-screen flex items-center justify-center px-6">
+          <div className="max-w-md w-full bg-white shadow-lg rounded-2xl p-8 text-center">
+            <div className="text-5xl mb-4">⚠️</div>
 
-      {/* ================= BENEFITS ================= */}
-      <section className="bg-white">
-        <div className="max-w-7xl mx-auto px-6 py-16">
+            <h1 className="text-3xl font-bold text-orange-600 mb-3">
+              Payment Verification Failed
+            </h1>
 
-          <div className="text-center max-w-2xl mx-auto">
-
-            <p className="text-purple-600 font-semibold">
-              PREMIUM BENEFITS
+            <p className="text-gray-600 mb-6">
+              We received the payment response, but could not verify it.
+              Please try again.
             </p>
 
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
-              Everything You Need to Enjoy Readora
-            </h2>
-
-            <p className="text-gray-600 mt-4">
-              Premium gives readers and writers additional tools and access
-              while keeping the core Readora experience available for free.
-            </p>
-
-          </div>
-
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mt-12">
-
-            {premiumFeatures.map((feature) => (
-              <div
-                key={feature.title}
-                className="border border-gray-200 rounded-2xl p-6 bg-white hover:shadow-lg transition"
-              >
-
-                <div className="w-14 h-14 rounded-xl bg-purple-100 flex items-center justify-center text-3xl">
-                  {feature.icon}
-                </div>
-
-                <h3 className="text-xl font-bold text-gray-900 mt-5">
-                  {feature.title}
-                </h3>
-
-                <p className="text-gray-600 mt-3 leading-7">
-                  {feature.description}
-                </p>
-
-              </div>
-            ))}
-
-          </div>
-
-        </div>
-      </section>
-
-      {/* ================= PLANS ================= */}
-      <section
-        id="plans"
-        className="bg-gray-50 py-16"
-      >
-        <div className="max-w-6xl mx-auto px-6">
-
-          <div className="text-center">
-
-            <p className="text-purple-600 font-semibold">
-              SIMPLE PRICING
-            </p>
-
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
-              Choose Your Readora Plan
-            </h2>
-
-            <p className="text-gray-600 mt-3">
-              Start for free or unlock the full Readora experience.
-            </p>
-
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto mt-12">
-
-            {plans.map((plan) => (
-              <div
-                key={plan.name}
-                className={`relative bg-white rounded-2xl p-8 ${
-                  plan.popular
-                    ? "border-2 border-purple-600 shadow-xl"
-                    : "border border-gray-200 shadow-sm"
-                }`}
-              >
-
-                {/* Popular Badge */}
-                {plan.popular && (
-                  <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-                    <span className="bg-purple-600 text-white px-5 py-2 rounded-full text-sm font-semibold whitespace-nowrap">
-                      Most Popular
-                    </span>
-                  </div>
-                )}
-
-                <h3 className="text-2xl font-bold text-gray-900">
-                  {plan.name}
-                </h3>
-
-                <p className="text-gray-600 mt-2">
-                  {plan.description}
-                </p>
-
-                {/* Price */}
-                <div className="mt-7 flex items-end gap-2">
-
-                  <span className="text-5xl font-bold text-gray-900">
-                    {plan.price}
-                  </span>
-
-                  {plan.price !== "$0" && (
-                    <span className="text-gray-500 mb-2">
-                      /month
-                    </span>
-                  )}
-
-                </div>
-
-                {/* Features */}
-                <div className="mt-8 space-y-4">
-
-                  {plan.features.map((feature) => (
-                    <div
-                      key={feature}
-                      className="flex items-start gap-3"
-                    >
-
-                      <span className="flex-shrink-0 w-5 h-5 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-xs font-bold mt-0.5">
-                        ✓
-                      </span>
-
-                      <span className="text-gray-700">
-                        {feature}
-                      </span>
-
-                    </div>
-                  ))}
-
-                </div>
-
-                {/* Button */}
-                {plan.popular ? (
-                  <button
-                    type="button"
-                    className="w-full mt-8 bg-purple-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-purple-700 transition"
-                  >
-                    {plan.button}
-                  </button>
-                ) : (
-                  <Link
-                    href="/books"
-                    className="block text-center w-full mt-8 border border-purple-600 text-purple-600 px-6 py-3 rounded-lg font-semibold hover:bg-purple-50 transition"
-                  >
-                    {plan.button}
-                  </Link>
-                )}
-
-              </div>
-            ))}
-
-          </div>
-
-          <p className="text-center text-sm text-gray-500 mt-6">
-            Payment and subscription management will be connected later.
-          </p>
-
-        </div>
-      </section>
-
-      {/* ================= COMPARISON ================= */}
-      <section className="bg-white py-16">
-
-        <div className="max-w-5xl mx-auto px-6">
-
-          <div className="text-center mb-10">
-
-            <h2 className="text-3xl font-bold text-gray-900">
-              Free vs Premium
-            </h2>
-
-            <p className="text-gray-600 mt-2">
-              See what is included with each plan.
-            </p>
-
-          </div>
-
-          <div className="overflow-x-auto border border-gray-200 rounded-2xl">
-
-            <table className="w-full text-left">
-
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-4 font-semibold text-gray-900">
-                    Feature
-                  </th>
-
-                  <th className="px-6 py-4 text-center font-semibold text-gray-900">
-                    Free
-                  </th>
-
-                  <th className="px-6 py-4 text-center font-semibold text-purple-700">
-                    Premium
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-gray-200">
-
-                <ComparisonRow
-                  feature="Book reading"
-                  free="Up to 5 books"
-                  premium="Unlimited"
-                />
-
-                <ComparisonRow
-                  feature="Premium books"
-                  free="No"
-                  premium="Yes"
-                />
-
-                <ComparisonRow
-                  feature="Save books"
-                  free="Yes"
-                  premium="Yes"
-                />
-
-                <ComparisonRow
-                  feature="Personal library"
-                  free="Limited"
-                  premium="Unlimited"
-                />
-
-                <ComparisonRow
-                  feature="Write stories"
-                  free="Yes"
-                  premium="Yes"
-                />
-
-                <ComparisonRow
-                  feature="Basic AI assistance"
-                  free="Yes"
-                  premium="Yes"
-                />
-
-                <ComparisonRow
-                  feature="Advanced AI tools"
-                  free="No"
-                  premium="Yes"
-                />
-
-                <ComparisonRow
-                  feature="Premium stories"
-                  free="No"
-                  premium="Yes"
-                />
-
-              </tbody>
-
-            </table>
-
-          </div>
-
-        </div>
-
-      </section>
-
-      {/* ================= FAQ ================= */}
-      <section className="bg-gray-50 py-16">
-
-        <div className="max-w-4xl mx-auto px-6">
-
-          <div className="text-center">
-
-            <p className="text-purple-600 font-semibold">
-              FAQ
-            </p>
-
-            <h2 className="text-3xl font-bold text-gray-900 mt-2">
-              Frequently Asked Questions
-            </h2>
-
-          </div>
-
-          <div className="mt-10 space-y-4">
-
-            {faqs.map((faq) => (
-              <details
-                key={faq.question}
-                className="bg-white border border-gray-200 rounded-xl p-5 group"
-              >
-
-                <summary className="cursor-pointer font-semibold text-gray-900 list-none flex items-center justify-between">
-                  {faq.question}
-
-                  <span className="text-purple-600 text-xl group-open:rotate-45 transition">
-                    +
-                  </span>
-                </summary>
-
-                <p className="text-gray-600 leading-7 mt-4">
-                  {faq.answer}
-                </p>
-
-              </details>
-            ))}
-
-          </div>
-
-        </div>
-
-      </section>
-
-      {/* ================= CTA ================= */}
-      <section className="bg-purple-700 py-16">
-
-        <div className="max-w-4xl mx-auto px-6 text-center">
-
-          <h2 className="text-3xl md:text-4xl font-bold text-white">
-            Start Your Reading Journey
-          </h2>
-
-          <p className="text-purple-100 mt-4 text-lg">
-            Discover stories, write your own, and become part of the Readora
-            community.
-          </p>
-
-          <div className="flex flex-col sm:flex-row justify-center gap-4 mt-8">
-
-            <Link
-              href="/books"
-              className="bg-white text-purple-700 px-7 py-3 rounded-lg font-semibold hover:bg-gray-100 transition"
+            <button
+              onClick={() => {
+                window.history.replaceState({}, "", "/premium");
+                window.location.reload();
+              }}
+              className="bg-black text-white px-6 py-3 rounded-lg"
             >
-              Explore Books
-            </Link>
-
-            <Link
-              href="/write"
-              className="border border-white text-white px-7 py-3 rounded-lg font-semibold hover:bg-white/10 transition"
-            >
-              Start Writing
-            </Link>
-
+              Try Again
+            </button>
           </div>
+        </main>
+      );
+    }
 
-        </div>
+    if (status === "login_required") {
+      return (
+        <main className="min-h-screen flex items-center justify-center px-6">
+          <div className="max-w-md w-full bg-white shadow-lg rounded-2xl p-8 text-center">
+            <div className="text-5xl mb-4">🔐</div>
 
-      </section>
+            <h1 className="text-3xl font-bold mb-3">
+              Login Required
+            </h1>
 
-    </main>
-  );
-}
+            <p className="text-gray-600 mb-6">
+              Please login to purchase Readora Premium.
+            </p>
 
+            <a
+              href="/login"
+              className="inline-block bg-black text-white px-6 py-3 rounded-lg"
+            >
+              Login
+            </a>
+          </div>
+        </main>
+      );
+    }
+  }
 
-/* ================= COMPARISON ROW ================= */
-
-function ComparisonRow({ feature, free, premium }) {
   return (
-    <tr>
-      <td className="px-6 py-4 text-gray-700 font-medium">
-        {feature}
-      </td>
+    <main className="min-h-screen bg-gray-50 px-6 py-16">
+      <div className="max-w-5xl mx-auto">
 
-      <td className="px-6 py-4 text-center text-gray-600">
-        {free}
-      </td>
+        <div className="text-center mb-12">
+          <h1 className="text-4xl md:text-5xl font-bold mb-4">
+            Readora Premium 👑
+          </h1>
 
-      <td className="px-6 py-4 text-center text-purple-700 font-medium">
-        {premium}
-      </td>
-    </tr>
+          <p className="text-gray-600 text-lg">
+            Unlock more books and premium reading features.
+          </p>
+        </div>
+
+        {error && (
+          <div className="max-w-xl mx-auto mb-8 bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+            <p className="font-semibold">Payment Error</p>
+            <p className="text-sm mt-1">{error}</p>
+          </div>
+        )}
+
+        <div className="max-w-md mx-auto bg-white rounded-2xl shadow-xl p-8">
+
+          <div className="text-center mb-8">
+            <div className="text-5xl mb-4">👑</div>
+
+            <h2 className="text-2xl font-bold mb-2">
+              Readora Premium
+            </h2>
+
+            <p className="text-gray-500">
+              One premium membership
+            </p>
+          </div>
+
+          <div className="text-center mb-8">
+            <span className="text-5xl font-bold">
+              Rs. 500
+            </span>
+
+            <span className="text-gray-500">
+              {" "}
+              / membership
+            </span>
+          </div>
+
+          <div className="space-y-4 mb-8">
+
+            <div className="flex gap-3">
+              <span>✓</span>
+              <span>Read more than 5 books</span>
+            </div>
+
+            <div className="flex gap-3">
+              <span>✓</span>
+              <span>Access premium books</span>
+            </div>
+
+            <div className="flex gap-3">
+              <span>✓</span>
+              <span>Unlimited reading</span>
+            </div>
+
+            <div className="flex gap-3">
+              <span>✓</span>
+              <span>Premium Readora features</span>
+            </div>
+
+          </div>
+
+          {!user ? (
+            <div className="text-center">
+              <p className="text-gray-600 mb-4">
+                Please login to continue.
+              </p>
+
+              <a
+                href="/login"
+                className="block w-full bg-black text-white py-3 rounded-lg font-semibold"
+              >
+                Login to Continue
+              </a>
+            </div>
+          ) : (
+            <button
+              onClick={handlePayment}
+              disabled={paymentLoading}
+              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white py-3 rounded-lg font-semibold transition"
+            >
+              {paymentLoading
+                ? "Connecting to eSewa..."
+                : "Pay Rs. 500 with eSewa"}
+            </button>
+          )}
+
+          <p className="text-xs text-gray-400 text-center mt-5">
+            You will be redirected to eSewa's secure payment page.
+          </p>
+
+        </div>
+      </div>
+    </main>
   );
 }
